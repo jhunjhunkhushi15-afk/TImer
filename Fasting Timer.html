@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Fasting Timer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #ffffff; display: flex; align-items: center; justify-content: center; min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+    #__bundler_loading { position: fixed; bottom: 20px; right: 20px; font: 13px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; color: #666; background: #fff; padding: 8px 14px; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.12); z-index: 10000; }
+    #__bundler_thumbnail { position: fixed; inset: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #ffffff; z-index: 9999; }
+    #__bundler_thumbnail svg { width: 100%; height: 100%; object-fit: contain; }
+    #__bundler_placeholder { color: #999; font-size: 14px; }
+  </style>
+  <noscript>
+    <style>#__bundler_loading { display: none; }</style>
+    <div style="position:fixed;bottom:12px;left:12px;font:13px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;color:#999;background:rgba(255,255,255,0.9);padding:6px 12px;border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,0.08);z-index:10000;">
+      This page requires JavaScript to display.
+    </div>
+  </noscript>
+</head>
+<body>
+  <div id="__bundler_thumbnail">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="600" cy="400" r="220" fill="none" stroke="#f1f0ef" stroke-width="32"></circle>
+    <circle cx="600" cy="400" r="220" fill="none" stroke="#976D57" stroke-width="32" stroke-linecap="round" stroke-dasharray="900 1500" transform="rotate(-90 600 400)"></circle>
+    <text x="600" y="415" text-anchor="middle" font-family="-apple-system, Helvetica, sans-serif" font-size="96" font-weight="600" fill="#37352f" letter-spacing="-2">18:00</text>
+  </svg>
+</div>
+  <div id="__bundler_loading">Unpacking...</div>
+
+  <script>
+    
+document.addEventListener('DOMContentLoaded', async function() {
+  const loading = document.getElementById('__bundler_loading');
+  function setStatus(msg) { if (loading) loading.textContent = msg; }
+
+  // Error sink persists across replaceWith since it's on window, not the DOM.
+  window.addEventListener('error', function(e) {
+    var p = document.body || document.documentElement;
+    var d = document.getElementById('__bundler_err') || p.appendChild(document.createElement('div'));
+    d.id = '__bundler_err';
+    d.style.cssText = 'position:fixed;bottom:12px;left:12px;right:12px;font:12px/1.4 ui-monospace,monospace;background:#2a1215;color:#ff8a80;padding:10px 14px;border-radius:8px;border:1px solid #5c2b2e;z-index:99999;white-space:pre-wrap;max-height:40vh;overflow:auto';
+    d.textContent = (d.textContent ? d.textContent + String.fromCharCode(10) : '') +
+      '[bundle] ' + (e.message || e.type) +
+      (e.filename ? ' (' + e.filename.slice(0, 60) + ':' + e.lineno + ')' : '');
+  }, true);
+
+  try {
+    const manifestEl = document.querySelector('script[type="__bundler/manifest"]');
+    const templateEl = document.querySelector('script[type="__bundler/template"]');
+    if (!manifestEl || !templateEl) {
+      setStatus('Error: missing bundle data');
+      console.error('[bundler] Missing script tags — manifestEl:', !!manifestEl, 'templateEl:', !!templateEl);
+      return;
+    }
+
+    const manifest = JSON.parse(manifestEl.textContent);
+    let template = JSON.parse(templateEl.textContent);
+
+    const uuids = Object.keys(manifest);
+    setStatus('Unpacking ' + uuids.length + ' assets...');
+
+    const blobUrls = {};
+    await Promise.all(uuids.map(async (uuid) => {
+      const entry = manifest[uuid];
+      try {
+        const binaryStr = atob(entry.data);
+        const bytes = new Uint8Array(binaryStr.length);
+        for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+
+        let finalBytes = bytes;
+        if (entry.compressed) {
+          if (typeof DecompressionStream !== 'undefined') {
+            const ds = new DecompressionStream('gzip');
+            const writer = ds.writable.getWriter();
+            const reader = ds.readable.getReader();
+            writer.write(bytes);
+            writer.close();
+            const chunks = [];
+            let totalLen = 0;
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              chunks.push(value);
+              totalLen += value.length;
+            }
+            finalBytes = new Uint8Array(totalLen);
+            let offset = 0;
+            for (const chunk of chunks) { finalBytes.set(chunk, offset); offset += chunk.length; }
+          } else {
+            console.warn('DecompressionStream not available, asset ' + uuid + ' may not render');
+          }
+        }
+
+        blobUrls[uuid] = URL.createObjectURL(new Blob([finalBytes], { type: entry.mime }));
+      } catch (err) {
+        console.error('Failed to decode asset ' + uuid + ':', err);
+        blobUrls[uuid] = URL.createObjectURL(new Blob([], { type: entry.mime }));
+      }
+    }));
+
+    const extResEl = document.querySelector('script[type="__bundler/ext_resources"]');
+    const extResources = extResEl ? JSON.parse(extResEl.textContent) : [];
+    const resourceMap = {};
+    for (const entry of extResources) {
+      if (blobUrls[entry.uuid]) resourceMap[entry.id] = blobUrls[entry.uuid];
+    }
+
+    setStatus('Rendering...');
+    for (const uuid of uuids) template = template.split(uuid).join(blobUrls[uuid]);
+
+    // Strip integrity + crossorigin — blob URLs from a file:// document inherit
+    // a null origin, so crossorigin forces a CORS fetch that SRI then rejects.
+    // The manifest bytes are ours; SRI protects against CDN compromise, not this.
+    template = template.replace(/\s+integrity="[^"]*"/gi, '').replace(/\s+crossorigin="[^"]*"/gi, '');
+
+    const resourceScript = '<script>window.__resources = ' +
+      JSON.stringify(resourceMap).split('</' + 'script>').join('<\\/' + 'script>') +
+      ';</' + 'script>';
+    // Inject after <head> so the DOCTYPE stays first; prepending the script
+    // would push the parser into quirks mode. DOMParser always emits a <head>
+    // (synthesizing one if the source HTML omitted it) but may carry
+    // attributes through, so match the full opening tag. slice() rather than
+    // replace() keeps us clear of $-pattern substitution in resourceScript.
+    const headOpen = template.match(/<head[^>]*>/i);
+    if (headOpen) {
+      const i = headOpen.index + headOpen[0].length;
+      template = template.slice(0, i) + resourceScript + template.slice(i);
+    }
+
+    // Parse the template and swap the root element. Scripts inserted via
+    // DOMParser/replaceWith are inert per spec — re-create each with
+    // createElement so they execute, awaiting onload for src scripts to
+    // preserve ordering (React before ReactDOM before Babel before text/babel).
+    const doc = new DOMParser().parseFromString(template, 'text/html');
+    document.documentElement.replaceWith(doc.documentElement);
+    const dead = Array.from(document.scripts);
+    for (const old of dead) {
+      const s = document.createElement('script');
+      for (const a of old.attributes) s.setAttribute(a.name, a.value);
+      s.textContent = old.textContent;
+      // text/babel scripts with a src: fetch and inline. transformScriptTags
+      // does XHR against the src, but blob:null/ from a file:// origin is
+      // silently dropped. Inlining makes it a plain inline babel script,
+      // which transformScriptTags handles unconditionally.
+      if ((s.type === 'text/babel' || s.type === 'text/jsx') && s.src) {
+        const r = await fetch(s.src);
+        s.textContent = await r.text();
+        s.removeAttribute('src');
+      }
+      const p = s.src ? new Promise(function(r) { s.onload = s.onerror = r; }) : null;
+      old.replaceWith(s);
+      if (p) await p;
+    }
+    // Babel standalone auto-transforms type=text/babel on DOMContentLoaded,
+    // which fired before we swapped the document. Trigger manually if present.
+    if (window.Babel && typeof window.Babel.transformScriptTags === 'function') {
+      window.Babel.transformScriptTags();
+    }
+  } catch (err) {
+    setStatus('Error unpacking: ' + err.message);
+    console.error('Bundle unpack error:', err);
+  }
+});
+
+  </script>
+
+  <script type="__bundler/manifest">
+{}
+  </script>
+
+  <script type="__bundler/ext_resources">
+[]
+  </script>
+
+  <script type="__bundler/template">
+"<!DOCTYPE html>\n<html lang=\"en\"><head>\n<meta charset=\"UTF-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n<title>Fasting Timer<\u002Ftitle>\n\n<style>\n  * { box-sizing: border-box; margin: 0; padding: 0; }\n  body {\n    font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Helvetica, Arial, sans-serif;\n    background: #ffffff;\n    color: #37352f;\n    min-height: 100vh;\n    display: flex;\n    align-items: center;\n    justify-content: center;\n  }\n  .container {\n    display: flex;\n    flex-direction: column;\n    align-items: center;\n    gap: 1.5rem;\n    padding: 2rem 1rem;\n  }\n  .label-top {\n    font-size: 11px;\n    font-weight: 500;\n    letter-spacing: 0.08em;\n    text-transform: uppercase;\n    color: #9b9a97;\n  }\n  .ring-wrap {\n    position: relative;\n    width: 220px;\n    height: 220px;\n  }\n  svg.ring {\n    width: 220px;\n    height: 220px;\n    transform: rotate(-90deg);\n  }\n  .ring-bg {\n    fill: none;\n    stroke: #f1f0ef;\n    stroke-width: 14;\n  }\n  .ring-fill {\n    fill: none;\n    stroke: #976D57;\n    stroke-width: 14;\n    stroke-linecap: round;\n    transition: stroke-dashoffset 1s linear;\n  }\n  .ring-center {\n    position: absolute;\n    top: 50%;\n    left: 50%;\n    transform: translate(-50%, -50%);\n    text-align: center;\n    width: 160px;\n  }\n  .time-left {\n    font-size: 36px;\n    font-weight: 600;\n    color: #37352f;\n    line-height: 1;\n    letter-spacing: -0.02em;\n  }\n  .time-label {\n    font-size: 11px;\n    color: #9b9a97;\n    margin-top: 5px;\n    letter-spacing: 0.02em;\n  }\n  .pct {\n    font-size: 11px;\n    color: #976D57;\n    margin-top: 3px;\n    font-weight: 500;\n  }\n  .status {\n    font-size: 13px;\n    color: #9b9a97;\n  }\n  .btn {\n    padding: 6px 14px;\n    border-radius: 4px;\n    font-size: 14px;\n    font-weight: 500;\n    cursor: pointer;\n    border: 1px solid rgba(55,53,47,0.16);\n    color: #37352f;\n    background: #ffffff;\n    transition: background 0.1s;\n    font-family: inherit;\n    box-shadow: rgba(15,15,15,0.1) 0px 0px 0px 1px inset;\n  }\n  .btn:hover { background: #f1f0ef; }\n  .btn:disabled { opacity: 0.4; cursor: default; }\n  .btn:disabled:hover { background: #ffffff; }\n  .btn.primary {\n    background: #976D57;\n    color: #ffffff;\n    border: none;\n    box-shadow: none;\n    padding: 7px 18px;\n  }\n  .btn.primary:hover { background: #835c49; }\n  .btn.primary:disabled:hover { background: #976D57; }\n  .btn-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; }\n  .done-msg { color: #0f7b6c; font-size: 13px; font-weight: 500; }\n  .divider {\n    width: 100%;\n    max-width: 240px;\n    height: 1px;\n    background: #e9e9e7;\n  }\n\n  /* iOS-style picker modal */\n  .modal-backdrop {\n    position: fixed;\n    inset: 0;\n    background: rgba(0,0,0,0.35);\n    display: none;\n    align-items: flex-end;\n    justify-content: center;\n    z-index: 100;\n    animation: fadeIn 0.2s ease;\n  }\n  .modal-backdrop.open { display: flex; }\n  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }\n  @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }\n\n  .sheet {\n    background: #f2f2f7;\n    width: 100%;\n    max-width: 420px;\n    border-radius: 14px 14px 0 0;\n    padding: 14px 16px 22px;\n    animation: slideUp 0.28s cubic-bezier(0.25, 0.8, 0.3, 1);\n    font-family: -apple-system, BlinkMacSystemFont, \"SF Pro Text\", \"Segoe UI\", Helvetica, Arial, sans-serif;\n  }\n  .sheet-header {\n    display: flex;\n    justify-content: space-between;\n    align-items: center;\n    padding: 4px 2px 10px;\n  }\n  .sheet-title {\n    font-size: 15px;\n    font-weight: 600;\n    color: #1c1c1e;\n  }\n  .sheet-subtitle {\n    font-size: 12px;\n    color: #6b6b70;\n    margin-top: 2px;\n  }\n  .sheet-btn {\n    background: none;\n    border: none;\n    color: #976D57;\n    font-size: 16px;\n    font-weight: 500;\n    cursor: pointer;\n    padding: 6px 4px;\n    font-family: inherit;\n  }\n  .sheet-btn.primary { font-weight: 600; }\n\n  .picker {\n    position: relative;\n    display: flex;\n    justify-content: center;\n    align-items: center;\n    gap: 0;\n    height: 180px;\n    background: #ffffff;\n    border-radius: 12px;\n    overflow: hidden;\n    margin-top: 6px;\n  }\n  .picker::before,\n  .picker::after {\n    content: \"\";\n    position: absolute;\n    left: 0; right: 0;\n    height: 72px;\n    pointer-events: none;\n    z-index: 2;\n  }\n  .picker::before {\n    top: 0;\n    background: linear-gradient(to bottom, rgba(255,255,255,0.95), rgba(255,255,255,0));\n  }\n  .picker::after {\n    bottom: 0;\n    background: linear-gradient(to top, rgba(255,255,255,0.95), rgba(255,255,255,0));\n  }\n  .picker-selection {\n    position: absolute;\n    top: 50%;\n    left: 8px;\n    right: 8px;\n    height: 36px;\n    transform: translateY(-50%);\n    background: rgba(120, 120, 128, 0.12);\n    border-radius: 8px;\n    pointer-events: none;\n    z-index: 1;\n  }\n  .wheel {\n    flex: 1;\n    height: 100%;\n    overflow-y: scroll;\n    scroll-snap-type: y mandatory;\n    scrollbar-width: none;\n    -ms-overflow-style: none;\n    -webkit-overflow-scrolling: touch;\n    text-align: center;\n    position: relative;\n    z-index: 3;\n  }\n  .wheel::-webkit-scrollbar { display: none; }\n  .wheel-inner {\n    padding: 72px 0;\n  }\n  .wheel-item {\n    height: 36px;\n    line-height: 36px;\n    font-size: 20px;\n    color: #1c1c1e;\n    scroll-snap-align: center;\n    font-variant-numeric: tabular-nums;\n    transition: opacity 0.15s, transform 0.15s;\n  }\n  .wheel-label {\n    font-size: 14px;\n    color: #6b6b70;\n    pointer-events: none;\n    position: relative;\n    z-index: 3;\n    min-width: 44px;\n    text-align: left;\n  }\n\n  .quick-row {\n    display: flex;\n    gap: 6px;\n    margin-top: 12px;\n    justify-content: center;\n    flex-wrap: wrap;\n  }\n  .quick-chip {\n    background: #ffffff;\n    border: none;\n    color: #976D57;\n    font-size: 13px;\n    font-weight: 500;\n    padding: 7px 12px;\n    border-radius: 16px;\n    cursor: pointer;\n    font-family: inherit;\n  }\n  .quick-chip:hover { background: #ead8d8; }\n\n  .preview {\n    text-align: center;\n    font-size: 12px;\n    color: #6b6b70;\n    margin-top: 10px;\n    font-variant-numeric: tabular-nums;\n  }\n  .preview strong {\n    color: #1c1c1e;\n    font-weight: 600;\n  }\n<\u002Fstyle>\n<\u002Fhead>\n<body>\n<div class=\"container\">\n  <div class=\"ring-wrap\">\n    <svg class=\"ring\" viewBox=\"0 0 220 220\">\n      <circle class=\"ring-bg\" cx=\"110\" cy=\"110\" r=\"94\"><\u002Fcircle>\n      <circle class=\"ring-fill\" id=\"ringFill\" cx=\"110\" cy=\"110\" r=\"94\"><\u002Fcircle>\n    <\u002Fsvg>\n    <div class=\"ring-center\">\n      <div class=\"time-left\" id=\"timeLeft\">18:00<\u002Fdiv>\n      <div class=\"time-label\" id=\"timeLabel\">hrs remaining<\u002Fdiv>\n      <div class=\"pct\" id=\"pctLabel\">0%<\u002Fdiv>\n    <\u002Fdiv>\n  <\u002Fdiv>\n\n  <div class=\"status\" id=\"statusMsg\">Ready to start<\u002Fdiv>\n\n  <div class=\"btn-row\">\n    <button class=\"btn primary\" id=\"mainBtn\" onclick=\"handleMain()\">Start fast<\u002Fbutton>\n    <button class=\"btn\" id=\"chooseBtn\" onclick=\"openPicker()\">Choose time<\u002Fbutton>\n    <button class=\"btn\" id=\"resetBtn\" onclick=\"handleReset()\" style=\"display:none\">Reset<\u002Fbutton>\n  <\u002Fdiv>\n<\u002Fdiv>\n\n<!-- iOS-style picker -->\n<div class=\"modal-backdrop\" id=\"pickerModal\" onclick=\"if(event.target===this) closePicker()\">\n  <div class=\"sheet\" role=\"dialog\" aria-label=\"Choose fast start time\">\n    <div class=\"sheet-header\">\n      <button class=\"sheet-btn\" onclick=\"closePicker()\">Cancel<\u002Fbutton>\n      <div style=\"text-align:center\">\n        <div class=\"sheet-title\">Fast started at<\u002Fdiv>\n        <div class=\"sheet-subtitle\" id=\"sheetSubtitle\">Today<\u002Fdiv>\n      <\u002Fdiv>\n      <button class=\"sheet-btn primary\" onclick=\"confirmPicker()\">Start<\u002Fbutton>\n    <\u002Fdiv>\n\n    <div class=\"picker\">\n      <div class=\"picker-selection\"><\u002Fdiv>\n      <div class=\"wheel\" id=\"wheelHour\"><div class=\"wheel-inner\" id=\"wheelHourInner\"><\u002Fdiv><\u002Fdiv>\n      <div class=\"wheel-label\">:<\u002Fdiv>\n      <div class=\"wheel\" id=\"wheelMin\"><div class=\"wheel-inner\" id=\"wheelMinInner\"><\u002Fdiv><\u002Fdiv>\n      <div class=\"wheel\" id=\"wheelMer\"><div class=\"wheel-inner\" id=\"wheelMerInner\"><\u002Fdiv><\u002Fdiv>\n    <\u002Fdiv>\n\n    <div class=\"quick-row\">\n      <button class=\"quick-chip\" onclick=\"quickSet(1)\">1h ago<\u002Fbutton>\n      <button class=\"quick-chip\" onclick=\"quickSet(3)\">3h ago<\u002Fbutton>\n      <button class=\"quick-chip\" onclick=\"quickSet(6)\">6h ago<\u002Fbutton>\n      <button class=\"quick-chip\" onclick=\"quickSet(12)\">12h ago<\u002Fbutton>\n      <button class=\"quick-chip\" onclick=\"quickSetNow()\">Now<\u002Fbutton>\n    <\u002Fdiv>\n\n    <div class=\"preview\" id=\"preview\">Fast has been running for <strong>0h 0m<\u002Fstrong><\u002Fdiv>\n  <\u002Fdiv>\n<\u002Fdiv>\n\n<script>\nconst TOTAL = 18 * 3600;\nconst circ = 2 * Math.PI * 94;\nconst ring = document.getElementById('ringFill');\nconst timeEl = document.getElementById('timeLeft');\nconst labelEl = document.getElementById('timeLabel');\nconst pctEl = document.getElementById('pctLabel');\nconst statusEl = document.getElementById('statusMsg');\nconst mainBtn = document.getElementById('mainBtn');\nconst chooseBtn = document.getElementById('chooseBtn');\nconst resetBtn = document.getElementById('resetBtn');\n\nring.style.strokeDasharray = circ;\nring.style.strokeDashoffset = circ;\n\nlet startTime = null;\nlet elapsed = 0;\nlet ticker = null;\nlet done = false;\n\nfunction fmt(secs) {\n  const h = Math.floor(secs / 3600);\n  const m = Math.floor((secs % 3600) / 60);\n  return h + ':' + String(m).padStart(2, '0');\n}\n\nfunction tick() {\n  elapsed = (Date.now() - startTime) / 1000;\n  if (elapsed >= TOTAL) {\n    elapsed = TOTAL;\n    clearInterval(ticker);\n    done = true;\n    render();\n    mainBtn.textContent = 'Done!';\n    mainBtn.disabled = true;\n    statusEl.innerHTML = '<span class=\"done-msg\">18 hours complete — great work!<\u002Fspan>';\n    return;\n  }\n  render();\n}\n\nfunction render() {\n  const rem = Math.max(0, TOTAL - elapsed);\n  const pct = Math.min(1, elapsed / TOTAL);\n  ring.style.strokeDashoffset = circ * (1 - pct);\n  timeEl.textContent = fmt(rem);\n  pctEl.textContent = Math.floor(pct * 100) + '%';\n  if (done) labelEl.textContent = 'complete';\n}\n\nfunction beginFastFrom(ts) {\n  startTime = ts;\n  mainBtn.textContent = 'Fasting...';\n  mainBtn.disabled = true;\n  chooseBtn.disabled = true;\n  statusEl.textContent = 'Fast in progress';\n  resetBtn.style.display = 'inline-block';\n  tick(); // immediate render\n  ticker = setInterval(tick, 1000);\n}\n\nfunction handleMain() {\n  if (!startTime) beginFastFrom(Date.now());\n}\n\nfunction handleReset() {\n  clearInterval(ticker);\n  startTime = null; elapsed = 0; done = false;\n  ring.style.strokeDashoffset = circ;\n  timeEl.textContent = '18:00';\n  labelEl.textContent = 'hrs remaining';\n  pctEl.textContent = '0%';\n  statusEl.textContent = 'Ready to start';\n  mainBtn.textContent = 'Start fast';\n  mainBtn.disabled = false;\n  chooseBtn.disabled = false;\n  resetBtn.style.display = 'none';\n}\n\n/* ---------- iOS-style picker ---------- */\nconst ITEM_H = 36;\nconst pickerModal = document.getElementById('pickerModal');\nconst wheelHour = document.getElementById('wheelHour');\nconst wheelMin  = document.getElementById('wheelMin');\nconst wheelMer  = document.getElementById('wheelMer');\nconst wheelHourInner = document.getElementById('wheelHourInner');\nconst wheelMinInner  = document.getElementById('wheelMinInner');\nconst wheelMerInner  = document.getElementById('wheelMerInner');\nconst previewEl = document.getElementById('preview');\nconst sheetSubtitleEl = document.getElementById('sheetSubtitle');\n\nfunction buildWheel(innerEl, items) {\n  innerEl.innerHTML = items.map(v => `<div class=\"wheel-item\">${v}<\u002Fdiv>`).join('');\n}\n\n// Hours 1–12, Minutes 00–59, AM/PM\nconst HOURS = Array.from({length: 12}, (_, i) => String(i + 1));\nconst MINS  = Array.from({length: 60}, (_, i) => String(i).padStart(2, '0'));\nconst MERS  = ['AM', 'PM'];\n\nbuildWheel(wheelHourInner, HOURS);\nbuildWheel(wheelMinInner,  MINS);\nbuildWheel(wheelMerInner,  MERS);\n\nfunction setWheel(wheel, items, value) {\n  const idx = items.indexOf(String(value));\n  const pos = Math.max(0, idx);\n  // Defer to ensure wheel is visible (layout ready)\n  requestAnimationFrame(() => {\n    wheel.scrollTop = pos * ITEM_H;\n  });\n}\n\nfunction readWheel(wheel, items) {\n  const idx = Math.round(wheel.scrollTop / ITEM_H);\n  return items[Math.max(0, Math.min(items.length - 1, idx))];\n}\n\nfunction getSelectedDate() {\n  const h12 = parseInt(readWheel(wheelHour, HOURS), 10);\n  const m   = parseInt(readWheel(wheelMin,  MINS),  10);\n  const mer = readWheel(wheelMer, MERS);\n  let h = h12 % 12;\n  if (mer === 'PM') h += 12;\n\n  const now = new Date();\n  const selected = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0, 0);\n  // If selected time is in the future, assume it was yesterday.\n  if (selected.getTime() > now.getTime()) {\n    selected.setDate(selected.getDate() - 1);\n  }\n  return selected;\n}\n\nfunction updatePreview() {\n  const d = getSelectedDate();\n  const now = new Date();\n  const diffSec = Math.max(0, Math.floor((now - d) / 1000));\n  const h = Math.floor(diffSec / 3600);\n  const m = Math.floor((diffSec % 3600) / 60);\n  previewEl.innerHTML = `Fast has been running for <strong>${h}h ${m}m<\u002Fstrong>`;\n\n  const isToday = d.toDateString() === now.toDateString();\n  sheetSubtitleEl.textContent = isToday ? 'Today' : 'Yesterday';\n}\n\nfunction attachWheelSnap(wheel, items) {\n  let snapTimer = null;\n  wheel.addEventListener('scroll', () => {\n    updatePreview();\n    clearTimeout(snapTimer);\n    snapTimer = setTimeout(() => {\n      const idx = Math.round(wheel.scrollTop / ITEM_H);\n      wheel.scrollTo({ top: idx * ITEM_H, behavior: 'smooth' });\n    }, 120);\n  });\n}\nattachWheelSnap(wheelHour, HOURS);\nattachWheelSnap(wheelMin,  MINS);\nattachWheelSnap(wheelMer,  MERS);\n\nfunction openPicker() {\n  // Default to \"now\" rounded to the nearest 5 min\n  const now = new Date();\n  const rounded = new Date(now);\n  rounded.setMinutes(Math.floor(now.getMinutes() / 5) * 5, 0, 0);\n  const h = rounded.getHours();\n  const h12 = ((h + 11) % 12) + 1;\n  const mer = h >= 12 ? 'PM' : 'AM';\n  const mm = String(rounded.getMinutes()).padStart(2, '0');\n\n  pickerModal.classList.add('open');\n  setWheel(wheelHour, HOURS, h12);\n  setWheel(wheelMin,  MINS,  mm);\n  setWheel(wheelMer,  MERS,  mer);\n  setTimeout(updatePreview, 60);\n}\n\nfunction closePicker() {\n  pickerModal.classList.remove('open');\n}\n\nfunction confirmPicker() {\n  const d = getSelectedDate();\n  closePicker();\n  beginFastFrom(d.getTime());\n}\n\nfunction quickSet(hoursAgo) {\n  const d = new Date(Date.now() - hoursAgo * 3600 * 1000);\n  const h = d.getHours();\n  const h12 = ((h + 11) % 12) + 1;\n  const mer = h >= 12 ? 'PM' : 'AM';\n  const mm = String(d.getMinutes()).padStart(2, '0');\n  setWheel(wheelHour, HOURS, h12);\n  setWheel(wheelMin,  MINS,  mm);\n  setWheel(wheelMer,  MERS,  mer);\n  setTimeout(updatePreview, 60);\n}\n\nfunction quickSetNow() { quickSet(0); }\n<\u002Fscript>\n\n\n<\u002Fbody><\u002Fhtml>"
+  </script>
+</body>
+</html>
